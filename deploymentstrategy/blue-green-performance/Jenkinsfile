@@ -1,0 +1,45 @@
+node("deployment") {
+    properties([parameters([
+        string(defaultValue: 'latest', name: 'GREEN_VERSION', trim: true, description: 'Green is newer version'),
+        string(defaultValue: 'latest', name: 'BLUE_VERSION', trim: true, description: 'Blue is older version')])])
+    stage("Cloning codebase for Security Environment Deployment") {
+        checkout scm
+    }
+    stage("Deploying the Green version on PT Environment") {
+        sh """
+        sudo docker run -itd --name spring3hibernate-green --label traefik.enable=true \
+        --label 'traefik.http.routers.spring3hibernate.rule=Host(`green-pt-spring.opstree.com`)' \
+        --label "traefik.port=8080" opstree/spring3hibernate:${GREEN_VERSION}
+        """
+    }
+    stage("Pause pipeline for Green version validation") {
+        input 'Do you want to proceed further?'
+    }
+    stage("Cut-over of traffic on Green version from Blue version") {
+        sh """
+        aws route53 change-resource-record-sets --hosted-zone-id Z10166071X5VNARP9PUCV --change-batch \
+        file://blue-green-performance/green-update.json
+        """
+    }
+    stage("Validation of Performance Testing Environment") {
+        returnValue = input message: 'Do you want to proceed further?',
+        parameters: [choice(choices: ['Rollback', 'Proceed'], name: 'action')]
+    }
+    if ("${returnValue}" == "Rollback") {
+        stage("Rollback in case of failure") {
+            sh """
+            aws route53 change-resource-record-sets --hosted-zone-id Z10166071X5VNARP9PUCV --change-batch \
+            file://blue-green-performance/blue-update.json
+            """
+        }
+    } else if ("${returnValue}" == "Proceed") {
+        stage("Live the traffic") {
+            sh """
+            sudo docker rm -f spring3hibernate-green
+            sudo docker run -itd --name spring3hibernate-blue --label traefik.enable=true \
+            --label 'traefik.http.routers.spring3hibernate.rule=Host(`blue-pt-spring.opstree.com`)' \
+            --label "traefik.port=8080" opstree/spring3hibernate:${GREEN_VERSION}
+            """
+        }
+    }
+}

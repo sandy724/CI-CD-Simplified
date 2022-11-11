@@ -1,0 +1,36 @@
+node("deployment") {
+    properties([parameters([string(defaultValue: 'latest', name: 'OLDER_VERSION', trim: true),
+    string(defaultValue: 'latest', name: 'NEW_VERSION', trim: true)])])
+    stage("Cloning codebase for Security Environment Deployment") {
+        checkout scm
+    }
+    stage("Deploying the ${NEW_VERSION} on Security Environment") {
+        sh """
+        sudo docker run -itd --name spring3hibernate-${NEW_VERSION} opstree/spring3hibernate:${NEW_VERSION}
+        """
+    }
+    stage("Validating the ${NEW_VERSION}") {
+        sh """
+        sleep 10s
+        NEW_IP=\$(sudo docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' spring3hibernate-${NEW_VERSION})
+        response=\$(curl --write-out '%{http_code}' --silent --output /dev/null http://\${NEW_IP}:8080)
+        if [[ "\${response}" != 200 ]; then
+            echo "Application is not working fine"
+            exit 1
+        fi
+        """
+    }
+    stage("Add the new version to load balancer") {
+        sh """
+            sudo docker rm -f spring3hibernate-${NEW_VERSION}
+            sudo docker run -itd --name spring3hibernate-${NEW_VERSION} --label traefik.enable=true \
+            --label 'traefik.http.routers.spring3hibernate.rule=Host(`security-spring.opstree.com`)' \
+            --label "traefik.port=8080" opstree/spring3hibernate:${NEW_VERSION}
+        """
+    }
+    stage("Removing old version") {
+        sh """
+        sudo docker rm -f spring3hibernate-${OLDER_VERSION}
+        """
+    }
+}
