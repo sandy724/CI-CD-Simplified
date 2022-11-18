@@ -1,0 +1,18 @@
+{
+  "Comment": "Update record to reflect new IP address for a system ",
+  "Changes": [
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "pt.opstree.com",
+        "Type": "CNAME",
+        "TTL": 60,
+        "ResourceRecords": [
+          {
+            "Value": "green.opstree.com"
+          }
+        ]
+      }
+    }
+  ]
+}

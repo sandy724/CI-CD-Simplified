@@ -1,0 +1,48 @@
+node("deployment") {
+    properties([parameters([
+        string(defaultValue: 'latest', name: 'BASELINE_VERSION', trim: true, description: 'Older version'),
+        string(defaultValue: 'latest', name: 'CANARY_VERSION', trim: true, description: 'Newer version')])])
+    stage("Cloning codebase for UAT Environment Deployment") {
+        checkout scm
+    }
+    stage("Deploy the Canary version on UAT Environment") {
+        sh """
+        sudo docker run -itd --name spring3hibernate-canary --label traefik.enable=true \
+        --label 'traefik.http.routers.spring3hibernate-canary.rule=Host(`uat-spring.opstree.com`)' \
+        --label "traefik.port=8080" --label "traefik.weight=10" --label "traefik.backend=app_weighted" \
+        opstree/spring3hibernate:${CANARY_VERSION}
+
+        sudo docker run -itd --name spring3hibernate-baseline --label traefik.enable=true \
+        --label 'traefik.http.routers.spring3hibernate-baseline.rule=Host(`uat-spring.opstree.com`)' \
+        --label "traefik.port=8080" --label "traefik.weight=90" --label "traefik.backend=app_weighted" \
+        opstree/spring3hibernate:${BASELINE_VERSION}
+        """
+    }
+    stage("Validation for Application") {
+        returnValue = input message: 'Do you want to proceed further?',
+        parameters: [choice(choices: ['Rollback', 'Proceed'], name: 'action')]
+    }
+    if ("${returnValue}" == "Rollback") {
+        stage("Rollback complete traffic to Baseline") {
+            sh """
+            sudo docker rm -f spring3hibernate-baseline
+            sudo docker run -itd --name spring3hibernate-baseline --label traefik.enable=true \
+            --label 'traefik.http.routers.spring3hibernate-baseline.rule=Host(`uat-spring.opstree.com`)' \
+            --label "traefik.port=8080" --label "traefik.weight=100" --label "traefik.backend=app_weighted" \
+            opstree/spring3hibernate:${BASELINE_VERSION}
+
+            sudo docker rm -f spring3hibernate-canary
+            """
+        }
+    } else if ("${returnValue}" == "Proceed") {
+        stage("Shifting all traffic to canary") {
+             sh """
+             sudo docker rm -f spring3hibernate-canary
+             sudo docker run -itd --name spring3hibernate-canary --label traefik.enable=true \
+             --label 'traefik.http.routers.spring3hibernate-baseline.rule=Host(`uat-spring.opstree.com`)' \
+             --label "traefik.port=8080" --label "traefik.weight=100" --label "traefik.backend=app_weighted" \
+             opstree/spring3hibernate:${CANARY_VERSION}
+             """
+        }
+    }
+}
